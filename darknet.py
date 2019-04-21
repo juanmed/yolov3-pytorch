@@ -64,7 +64,7 @@ class Darknet(nn.Module):
             elif(module_type == 'route'):
 
                 layers = module['layers']           # obtener indice de capas a rutear
-                print("Route Layer {} layers: {}".format(i,layers))
+                #print("Route Layer {} layers: {}".format(i,layers))
                 layers = [int(layer) for layer in layers]   # y convertir a int
 
                 if (layers[0] > 0):                  # en teoria, esto no debe suceder
@@ -77,7 +77,7 @@ class Darknet(nn.Module):
                 else:
                     if (layers[1] > 0):             # rutear varias capas
                         layers[1] = layers[1] - i 
-                        print("Capa {} Tipo {} tiene layers[1] > 0!".format(i, module_type))
+                        #print("Capa {} Tipo {} tiene layers[1] > 0!".format(i, module_type))
 
                     # obtener la salida de las capas a rutear
                     # *** Esto esta hard-coded, se puede mejorar
@@ -110,6 +110,115 @@ class Darknet(nn.Module):
             outputs[i] = x
 
         return detections
+
+    def load_weights(self, weightfile_dir):
+        """
+        @description lee un archivo de pesos de la red y los carga a las
+        capas apropiadas de la red
+        @weightfile_dir directory de los pesos de la red
+        @return 
+        """
+
+        fp = open(weightfile_dir, "rb")
+
+        #The first 5 values are header information 
+        # 1. Major version number
+        # 2. Minor Version Number
+        # 3. Subversion number 
+        # 4,5. Images seen by the network (during training)
+        header = np.fromfile(fp, dtype = np.int32, count = 5)
+        self.header = torch.from_numpy(header)
+        self.seen = self.header[3]
+
+        weights = np.fromfile(fp, dtype=np.float32)
+
+        ptr = 0
+        conv_layers = 0
+        #num_weights_network = 0
+        for i in range(len(self.module_list)):
+            module_type = self.blocks[i+1]['type']
+
+            # cargar pesos solo si la red es convolucional
+            if (module_type == 'convolutional'):
+                model = self.module_list[i]
+                try:
+                    batch_normalize = int(self.blocks[i+1]['batch_normalize'])
+                except:
+                    batch_normalize = 0
+
+                conv = model[0]
+
+                if (batch_normalize):
+                    # cargar capa
+                    bn = model[1]
+
+                    # obtener numero de pesos de la capa
+                    num_bn_biases = bn.bias.numel()
+
+                    # leer los pesos desde archivo
+                    # primero los biases
+                    bn_biases = torch.from_numpy(weights[ptr: ptr + num_bn_biases])
+                    ptr  = ptr + num_bn_biases          # actualizar puntero
+
+                    # ahora los pesos
+                    bn_weights = torch.from_numpy(weights[ptr: ptr + num_bn_biases])
+                    ptr = ptr + num_bn_biases
+
+                    bn_running_mean = torch.from_numpy(weights[ptr: ptr + num_bn_biases])
+                    ptr = ptr + num_bn_biases
+
+                    bn_running_var = torch.from_numpy(weights[ptr: ptr + num_bn_biases])
+                    ptr = ptr + num_bn_biases
+
+                    # dimensionar los pesos de acuerdo a la forma de la capa
+                    bn_biases = bn_biases.view_as(bn.bias.data)
+                    bn_weights = bn_weights.view_as(bn.weight.data)
+                    bn_running_mean = bn_running_mean.view_as(bn.running_mean)
+                    bn_running_var = bn_running_var.view_as(bn.running_var)
+
+                    # cargar los pesos hacia la capa
+                    bn.bias.data.copy_(bn_biases)
+                    bn.weight.data.copy_(bn_weights)
+                    bn.running_mean.copy_(bn_running_mean)
+                    bn.running_var.copy_(bn_running_var)
+
+                else:
+
+                    # Numero de biases
+                    num_biases = conv.bias.numel()
+
+                    # leer los pesos desde archivo
+                    conv_biases = torch.from_numpy(weights[ptr: ptr + num_biases])
+                    ptr = ptr + num_biases              # actualizar puntero
+
+                    # dimensionar los pesos de acuerdo a la forma de la capa
+                    conv_biases = conv_biases.view_as(conv.bias.data)
+
+                    # cargar los pesos hacia la capa
+                    conv.bias.data.copy_(conv_biases)
+                
+                # cargar pesos de capa convolucional
+                num_weights = conv.weight.numel()
+
+                # leer los pesos desde el archivo
+                conv_weights = torch.from_numpy(weights[ptr : ptr + num_weights])
+                ptr = ptr + num_weights
+
+                # dimensionar los pesos de acuerdo a la forma de la capa
+                conv_weights = conv_weights.view_as(conv.weight.data)
+
+                # cargar los pesos hacia la capa
+                conv.weight.data.copy_(conv_weights)
+
+                conv_layers = conv_layers + 1
+
+        print(" Se cargo {} pesos para {} capas convolucionales.".format(ptr,conv_layers))
+
+
+
+
+
+
 
 def parse_cfg(cfgfile):
     """
@@ -267,8 +376,9 @@ def get_test_input(img_dir, dims):
 if __name__ == '__main__':
     import sys
     cfgfile_dir = sys.argv[1]                       # leer archivo de configuracion
-    tstimg_dir = sys.argv[2]                        # leer imagen a probar
-    
+    tstimg_dir = sys.argv[3]                        # leer imagen a probar
+    wgtfile_dir = sys.argv[2]                        # leer pesos
+
     bloques = parse_cfg(cfgfile_dir)                # parsear archivo de conf
     net_info, module_list = create_modules(bloques) # crear lista de capas
 
@@ -277,6 +387,7 @@ if __name__ == '__main__':
     #print("\" Capas: \n{}".format(module_list))
 
     model = Darknet(cfgfile_dir)                    # crear red
+    model.load_weights(wgtfile_dir)                 # cargar pesos
     inp = get_test_input(tstimg_dir, img_dims)                
     pred = model(inp, False)
     print (pred)
