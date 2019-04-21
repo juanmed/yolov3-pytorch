@@ -6,6 +6,8 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np 
 
+from util import *
+
 
 class EmptyLayer(nn.Module):
     """
@@ -26,7 +28,88 @@ class DetectionLayer(nn.Module):
         super(DetectionLayer, self).__init__()
         self.anchors = anchors
 
+class Darknet(nn.Module):
+    """
+    Esta clase contiene la red neural profunda conformada por una lista de 
+    capas recibida en module_list y parametros en net_params
+    """
 
+    def __init__(self, cfgfile):
+        super(Darknet, self).__init__()
+        self.blocks = parse_cfg(cfgfile)            # leer archivo de conf
+        self.net_params, self.module_list = create_modules(self.blocks)
+
+    def forward(self, x, CUDA):
+        """
+        @x imagen de entrada
+        @CUDA Si es TRUE, usar GPU
+
+        Recibir imagen de entrada, pasarla por cada capa en self.module_list,
+        almacenar la salida de cada capa en un diccionario, y por ultimo
+        retorna la salida de la ultima capa
+        """
+
+        modules = self.blocks[1:]
+        outputs = {}
+
+        write = 0
+        for i, module in enumerate(modules):
+            
+            module_type = module['type']            
+            
+            if(module_type == 'convolutional' or module_type == 'upsample'):
+            
+                x = self.module_list[i](x)          # simplement pasar imagen por la capa
+
+            elif(module_type == 'route'):
+
+                layers = module['layers']           # obtener indice de capas a rutear
+                print("Route Layer {} layers: {}".format(i,layers))
+                layers = [int(layer) for layer in layers]   # y convertir a int
+
+                if (layers[0] > 0):                  # en teoria, esto no debe suceder
+                    layers[0] = layers[0] - i
+                    print("Capa {} Tipo {} tiene layers[0] > 0!".format(i, module_type))
+
+                if len(layers) == 1:
+                    x = outputs[i + layers[0]]      # solo rutea 1 capa asi que
+                                                    # obtener salida de la capa (previa) i + layers[0]
+                else:
+                    if (layers[1] > 0):             # rutear varias capas
+                        layers[1] = layers[1] - i 
+                        print("Capa {} Tipo {} tiene layers[1] > 0!".format(i, module_type))
+
+                    # obtener la salida de las capas a rutear
+                    # *** Esto esta hard-coded, se puede mejorar
+                    feature_map1 = outputs[i + layers[0]]   
+                    feature_map2 = outputs[i + layers[1]]
+
+                    x = torch.cat((feature_map1, feature_map2), 1)  # concatenar a lo profundo
+
+            elif( module_type == 'shortcut'):
+
+                from_ = int(module['from'])
+                x = outputs[i-1] + outputs[i + from_]
+
+            elif( module_type == 'yolo'):
+
+                anchors = self.module_list[i][0].anchors
+
+                inp_dim = int(self.net_params['height'])
+
+                num_classes = int(module['classes'])
+
+                x = x.data
+                x = predict_transform(x, inp_dim, anchors, num_classes, CUDA)
+                if not write:
+                    detections = x
+                    write = 1
+                else:
+                    detections = torch.cat((detections, x), 1)
+
+            outputs[i] = x
+
+        return detections
 
 def parse_cfg(cfgfile):
     """
@@ -119,13 +202,14 @@ def create_modules(blocks):
             stride = int(block['stride'])
             upsample = nn.Upsample(scale_factor = 2, mode = 'bilinear')
             module.add_module("upsample_{}".format(index), upsample)
-        elif(block['type'] == 'route'):
-            layers = block['layers'].split(',')     # obtener lista de layers a conectar
 
-            start = int(layers[0])
+        elif(block['type'] == 'route'):
+            block['layers'] = block['layers'].split(',')     # obtener lista de layers a conectar
+            
+            start = int(block['layers'][0])
 
             try:
-                end = int(layers[1])
+                end = int(block['layers'][1])
             except:
                 end = 0
 
@@ -161,22 +245,41 @@ def create_modules(blocks):
             detection = DetectionLayer(anchors)
             module.add_module('Detection_{}'.format(index), detection)
 
-        module_list.append(module)
-        prev_filters = filters
-        output_filters.append(filters)
+        module_list.append(module)                  # anadir la capa creada a la lista de capas
+        prev_filters = filters                      # actualizar info, sera utilizada por siguiente capa
+        output_filters.append(filters)              # 
+        #print("Output Filters \n {}".format(output_filters))
 
     return (net_parameters, module_list) 
 
-
+def get_test_input(img_dir, dims):
+    img = cv2.imread(img_dir)
+    img = cv2.resize(img, dims)
+    img_ = img[:,:,::-1].transpose((2,0,1)) #cv2.cvtColor(img, cv2.COLOR_BGR2RGB)      # BGR to RGB
+    #img_ = img_.transpose((2,0,1))                    # h x w x c -> c x h x w
+    img_ = img_[np.newaxis,:,:,:]/255.0              # anadir canal (para batch)
+    img_ = torch.from_numpy(img_).float()
+    img_ = Variable(img_)
+    return img_
 
 
 
 if __name__ == '__main__':
     import sys
     cfgfile_dir = sys.argv[1]                       # leer archivo de configuracion
+    tstimg_dir = sys.argv[2]                        # leer imagen a probar
+    
     bloques = parse_cfg(cfgfile_dir)                # parsear archivo de conf
     net_info, module_list = create_modules(bloques) # crear lista de capas
-    print("\n Network Information: \n{}".format(net_info))
-    print("\" Capas: \n{}".format(module_list))
-    #print(bloques,len(bloques))
+
+    img_dims = (int(net_info['height']), int(net_info['width']))
+    #print("\n Network Information: \n{}".format(net_info))
+    #print("\" Capas: \n{}".format(module_list))
+
+    model = Darknet(cfgfile_dir)                    # crear red
+    inp = get_test_input(tstimg_dir, img_dims)                
+    pred = model(inp, False)
+    print (pred)
+
+
 
