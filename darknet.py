@@ -214,12 +214,6 @@ class Darknet(nn.Module):
 
         print(" Se cargo {} pesos para {} capas convolucionales.".format(ptr,conv_layers))
 
-
-
-
-
-
-
 def parse_cfg(cfgfile):
     """
     Takes a darknet configuration file and output a list of blocks.
@@ -244,7 +238,7 @@ def parse_cfg(cfgfile):
     # anadir cada bloque a la lista de bloques
     for line in lines:
         if line[0] == "[":                          # Identificar si es inicio de bloque
-            if len(block) != 0:                     # ¿Antiguo bloque tiene datos?
+            if len(block) != 0:                     # Antiguo bloque tiene datos?
                 blocks.append(block)                # Anadir el antiguo bloque
                 block = {}                          # y crear uno nuevo 
             block['type'] = line[1:-1].rstrip()     # Almacenar tipo de bloque
@@ -372,6 +366,8 @@ def get_test_input(img_dir, dims):
     return img_
 
 
+# example command
+# python darknet.py cfg/yolov3.cfg backup/yolov3.weights dog-cycle-car.png
 
 if __name__ == '__main__':
     import sys
@@ -390,7 +386,10 @@ if __name__ == '__main__':
     model.load_weights(wgtfile_dir)                 # cargar pesos
     inp = get_test_input(tstimg_dir, img_dims)                
     pred = model(inp, False)
-    print (pred)
+    print("Predictions: {}, {}\n {}".format(pred.size(),type(pred),pred[:,:,:5]))
+    # post processing
+    detections = write_results(pred, 0.1, 80)
+    print (detections)
 
 
 
