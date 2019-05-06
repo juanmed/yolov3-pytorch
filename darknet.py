@@ -212,8 +212,9 @@ class Darknet(nn.Module):
 
                 conv_layers = conv_layers + 1
 
-        print(" Se cargo {} pesos para {} capas convolucionales.".format(ptr,conv_layers))
-
+        #print(" Se cargo {} pesos para {} capas convolucionales.".format(ptr,conv_layers))
+        return (ptr, conv_layers) 
+        
 def parse_cfg(cfgfile):
     """
     Takes a darknet configuration file and output a list of blocks.
