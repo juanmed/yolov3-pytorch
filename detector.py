@@ -165,7 +165,8 @@ for i, batch in enumerate(im_batches):
         batch = batch.cuda()
 
     # forward pass el primer batch
-    prediction= model( Variable(batch, volatile=True), CUDA)
+    with torch.no_grad()
+        prediction= model( Variable(batch), CUDA)
 
     # Filtrar por confianza, hacer Non Max Supression
     prediction = write_results(prediction, confidence, num_classes, nms_thresh = nms_thresh)
